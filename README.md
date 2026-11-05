@@ -32,7 +32,7 @@ A path ending in `.db` selects SQLite. A `postgresql://` DSN selects Postgres (n
 `pip install pytest`, then `python3 -m pytest test_sqlite.py` (no server). Postgres tests need `CTX_DSN` and psycopg. The SQLite file of record for this package is 19 passed.
 
 ## Try it (reviewer)
-No account, no API key, and no network. From the directory that contains `cli.py`:
+The local SQLite smoke test requires no ctxlayer account or API key. Downloading dependencies may use the network. Optional Anthropic summarization and transcript extraction send selected content to Anthropic when enabled; they are not used in this test. From the directory that contains `cli.py`:
 
 ```
 python3 -m pip install pytest
