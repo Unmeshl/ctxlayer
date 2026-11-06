@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ctxlayer",
+  "description": "Self-hosted marketplace for the ctxlayer early beta. The plugin is the local SQLite wake gate and thin context slice. No savings claim.",
+  "owner": {
+    "name": "Thinking Minds, Inc.",
+    "url": "https://github.com/Unmeshl/ctxlayer"
+  },
+  "plugins": [
+    {
+      "name": "ctxlayer",
+      "source": "./",
+      "description": "Early beta. One local SQLite file that tells an agent when a thread has nothing new, and returns only the new slice when it does. No savings claim.",
+      "author": {
+        "name": "Thinking Minds, Inc."
+      },
+      "homepage": "https://github.com/Unmeshl/ctxlayer",
+      "repository": "https://github.com/Unmeshl/ctxlayer",
+      "license": "Apache-2.0",
+      "keywords": ["sqlite", "agents", "context"]
+    }
+  ]
+}

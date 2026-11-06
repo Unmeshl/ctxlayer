@@ -12,6 +12,23 @@ A small local layer that stops AI agents from waking up and re-reading everythin
 - `report`: per-agent tokens delivered vs what a full replay would have cost, including this tool's own overhead.
 - Run rules for agents: stop after about 40 tool calls or 2 failed attempts, send long output to files, don't re-read files.
 
+## Claude Code
+
+This repository is a self-hosted plugin marketplace. The plugin loads `skills/ctxlayer-local`. Add the marketplace once, then install the plugin:
+
+```
+claude plugin marketplace add Unmeshl/ctxlayer
+claude plugin install ctxlayer@ctxlayer
+```
+
+On Claude Code 2.1.292 or later, one command does both:
+
+```
+claude plugin install ctxlayer --marketplace Unmeshl/ctxlayer
+```
+
+Inside a session on Claude Code 2.1.275 or later: `/plugin install ctxlayer --marketplace Unmeshl/ctxlayer`
+
 ## Install (no server)
 Needs Python 3.10+ only.
 ```

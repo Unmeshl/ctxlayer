@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "ctxlayer",
+  "version": "0.1.0-beta",
+  "description": "Early beta. One local SQLite file that tells an agent when a thread has nothing new, and returns only the new slice when it does. No savings claim.",
+  "author": {
+    "name": "Thinking Minds, Inc."
+  },
+  "homepage": "https://github.com/Unmeshl/ctxlayer",
+  "repository": "https://github.com/Unmeshl/ctxlayer",
+  "license": "Apache-2.0",
+  "keywords": ["sqlite", "agents", "context"]
+}
