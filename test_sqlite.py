@@ -281,6 +281,40 @@ def test_cli_wake_context_read_does_not_advance_cursor(tmp_path):
     assert last_seen == int(msg_id)
 
 
+def test_cli_commit_upto_captured_last_id_does_not_skip_later_ingest(tmp_path):
+    """A commit is bounded by the last_id context returned. A row ingested after that read stays new."""
+    db = str(tmp_path / "bounded.db")
+    assert cli(db, "install").returncode == 0
+    first = cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "ext-first",
+                "--body", "first-row-body")
+    assert first.returncode == 0 and first.stdout.strip().isdigit()
+
+    ctx = cli(db, "context", "--agent", "ada", "--thread", "t", "--only-new")
+    assert ctx.returncode == 0 and "first-row-body" in ctx.stdout
+    last_id = str(json.loads(ctx.stderr)["last_id"])
+    assert last_id.isdigit() and last_id == first.stdout.strip()
+
+    later = cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "ext-later",
+                "--body", "later-row-body")
+    assert later.returncode == 0 and later.stdout.strip().isdigit()
+    assert later.stdout.strip() != last_id
+
+    committed = cli(db, "commit", "--agent", "ada", "--thread", "t", "--upto", last_id)
+    assert committed.returncode == 0
+    opened = cli(db, "has-new", "--agent", "ada", "--thread", "t")
+    assert opened.returncode == 0 and int(opened.stdout.strip()) >= 1
+
+    nxt = cli(db, "context", "--agent", "ada", "--thread", "t", "--only-new")
+    assert nxt.returncode == 0
+    assert "later-row-body" in nxt.stdout
+    assert "first-row-body" not in nxt.stdout
+    assert str(json.loads(nxt.stderr)["last_id"]) == later.stdout.strip()
+    last_seen = sqlite3.connect(db).execute(
+        "SELECT last_seen FROM ctx_cursors WHERE agent_id=? AND thread_id=?", ("ada", "t")
+    ).fetchone()[0]
+    assert last_seen == int(last_id) and last_seen != int(later.stdout.strip())
+
+
 def test_docs_say_runners_alert_unless_has_new_exits_0_or_1():
     readme = open(os.path.join(HERE, "README.md"), encoding="utf-8").read()
     skill = open(os.path.join(HERE, "skills", "ctxlayer-local", "SKILL.md"), encoding="utf-8").read()
