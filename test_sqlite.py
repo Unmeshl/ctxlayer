@@ -1,6 +1,8 @@
 """SQLite backend tests: no server needed. Reuses the Postgres core tests that apply to the core (no extras),
 run against a SQLite file, plus SQLite-specific checks. Run:  python3 -m pytest test_sqlite.py"""
+import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,14 @@ from ctxlayer import StaleSummary
 from sqlite_store import SqliteBriefStore, SqliteStore, open_store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def cli(dsn, *args, stdin=None):
+    """Run the shipped CLI against one SQLite path. No network."""
+    return subprocess.run(
+        [sys.executable, os.path.join(HERE, "cli.py"), "--dsn", dsn, *args],
+        input=stdin, capture_output=True, text=True, cwd=HERE,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -146,3 +156,136 @@ def test_cli_end_to_end_on_a_sqlite_file(sqlite_backend):
     assert run("brief", "init").returncode == 0
     assert run("brief", "add", "--project", "p", "--kind", "goal", "--text", "g").returncode == 0
     assert run("brief", "ready", "--project", "p").returncode == 1  # no requirements yet
+
+
+def test_cli_has_new_missing_parent_is_store_error_not_quiet():
+    dsn = "/nonexistent/dir/x.db"
+    r = cli(dsn, "has-new", "--agent", "ada", "--thread", "t")
+    assert r.returncode == 3
+    assert r.stdout == ""
+    assert "Traceback" not in r.stderr
+    assert "store error:" in r.stderr
+    assert "unable to open database file" in r.stderr
+    assert dsn not in r.stderr and dsn not in r.stdout
+
+
+def test_cli_has_new_corrupt_db_is_store_error_not_quiet(tmp_path):
+    db = tmp_path / "corrupt.db"
+    db.write_bytes(b"not a sqlite database\n")
+    r = cli(str(db), "has-new", "--agent", "ada", "--thread", "t")
+    assert r.returncode == 3
+    assert r.stdout == ""
+    assert "Traceback" not in r.stderr
+    assert "store error:" in r.stderr
+    assert "not a database" in r.stderr
+    assert str(db) not in r.stderr and str(db) not in r.stdout
+
+
+def test_cli_has_new_uninstalled_db_is_store_error_not_quiet(tmp_path):
+    db = tmp_path / "empty.db"
+    sqlite3.connect(db).close()  # valid file, no ctxlayer schema
+    r = cli(str(db), "has-new", "--agent", "ada", "--thread", "t")
+    assert r.returncode == 3
+    assert r.stdout == ""
+    assert "Traceback" not in r.stderr
+    assert "store error:" in r.stderr
+    assert "no such table" in r.stderr
+    assert str(db) not in r.stderr and str(db) not in r.stdout
+
+
+def test_cli_has_new_does_not_hide_programming_errors(sqlite_backend, monkeypatch):
+    import cli as cli_mod
+
+    def boom(*_a, **_k):
+        raise sqlite3.ProgrammingError("Incorrect number of bindings supplied")
+
+    monkeypatch.setattr("sqlite_store.SqliteStore.has_new", boom)
+    with pytest.raises(sqlite3.ProgrammingError):
+        cli_mod.main(["--dsn", sqlite_backend, "has-new", "--agent", "ada", "--thread", "t"])
+
+
+def test_cli_only_new_returns_messages_arrived_together(tmp_path):
+    db = str(tmp_path / "slice.db")
+    assert cli(db, "install").returncode == 0
+    assert cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "m1",
+               "--body", "alpha-one").stdout.strip() == "1"
+    assert cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "m2",
+               "--body", "alpha-two").stdout.strip() == "2"
+    ctx = cli(db, "context", "--agent", "ada", "--thread", "t", "--only-new")
+    assert ctx.returncode == 0
+    assert ctx.stdout.index("alpha-one") < ctx.stdout.index("alpha-two")
+    assert cli(db, "commit", "--agent", "ada", "--thread", "t", "--upto", "2").returncode == 0
+    assert cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "m3",
+               "--body", "beta-three").returncode == 0
+    assert cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "m4",
+               "--body", "beta-four").returncode == 0
+    later = cli(db, "context", "--agent", "ada", "--thread", "t", "--only-new")
+    assert later.stdout.index("beta-three") < later.stdout.index("beta-four")
+    assert "alpha-one" not in later.stdout and "alpha-two" not in later.stdout
+
+
+def test_cli_same_external_id_retry_is_duplicate_and_edit_is_ignored(tmp_path):
+    """Known gap: a new body for an existing external id is not stored."""
+    db = str(tmp_path / "dedupe.db")
+    assert cli(db, "install").returncode == 0
+    first = cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "same",
+                "--body", "original-body")
+    assert first.returncode == 0 and first.stdout.strip() == "1"
+    again = cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "same",
+                "--body", "original-body")
+    assert again.returncode == 0 and again.stdout.strip() == "duplicate"
+    edited = cli(db, "ingest", "--thread", "t", "--author", "bao", "--external-id", "same",
+                 "--body", "edited-body")
+    assert edited.returncode == 0 and edited.stdout.strip() == "duplicate"
+    ctx = cli(db, "context", "--agent", "ada", "--thread", "t", "--only-new")
+    assert "original-body" in ctx.stdout
+    assert "edited-body" not in ctx.stdout
+    assert sqlite3.connect(db).execute("SELECT count(*) FROM ctx_messages").fetchone()[0] == 1
+    assert sqlite3.connect(db).execute("SELECT body FROM ctx_messages").fetchone()[0] == "original-body"
+
+
+def test_cli_wake_context_read_does_not_advance_cursor(tmp_path):
+    db = str(tmp_path / "wake.db")
+    assert cli(db, "install").returncode == 0
+    ingested = cli(db, "ingest", "--thread", "wake", "--author", "bao", "--external-id", "ext-1",
+                   "--body", "synthetic-known-row")
+    assert ingested.returncode == 0
+    msg_id = ingested.stdout.strip()
+    assert msg_id.isdigit()
+
+    opened = cli(db, "has-new", "--agent", "ada", "--thread", "wake")
+    assert opened.returncode == 0 and int(opened.stdout.strip()) >= 1
+
+    ctx = cli(db, "context", "--agent", "ada", "--thread", "wake", "--only-new")
+    assert ctx.returncode == 0 and "synthetic-known-row" in ctx.stdout
+    stats = json.loads(ctx.stderr)
+    assert str(stats["last_id"]) == msg_id
+
+    # A second read still does not move the cursor: the gate stays open.
+    again = cli(db, "context", "--agent", "ada", "--thread", "wake", "--only-new")
+    assert "synthetic-known-row" in again.stdout
+    still_open = cli(db, "has-new", "--agent", "ada", "--thread", "wake")
+    assert still_open.returncode == 0
+    cursor = sqlite3.connect(db).execute(
+        "SELECT last_seen FROM ctx_cursors WHERE agent_id=? AND thread_id=?", ("ada", "wake")
+    ).fetchone()
+    assert cursor is None
+
+    committed = cli(db, "commit", "--agent", "ada", "--thread", "wake", "--upto", msg_id)
+    assert committed.returncode == 0
+    quiet = cli(db, "has-new", "--agent", "ada", "--thread", "wake")
+    assert quiet.returncode == 1 and quiet.stdout.strip() == "0"
+    last_seen = sqlite3.connect(db).execute(
+        "SELECT last_seen FROM ctx_cursors WHERE agent_id=? AND thread_id=?", ("ada", "wake")
+    ).fetchone()[0]
+    assert last_seen == int(msg_id)
+
+
+def test_docs_say_runners_alert_unless_has_new_exits_0_or_1():
+    readme = open(os.path.join(HERE, "README.md"), encoding="utf-8").read()
+    skill = open(os.path.join(HERE, "skills", "ctxlayer-local", "SKILL.md"), encoding="utf-8").read()
+    for text in (readme, skill):
+        assert "anything other than 0 or 1" in text
+        assert "exit 3" in text.lower() or "Exit 3" in text
+        assert "alert" in text.lower()
+    assert "known gap" in skill.lower() or "known gap" in readme.lower()

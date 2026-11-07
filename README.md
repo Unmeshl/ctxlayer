@@ -5,8 +5,8 @@ A small local layer that stops AI agents from waking up and re-reading everythin
 **Status: early beta. We make no savings claim yet.** We are measuring it on our own bots and will publish the numbers, good or bad. If you try it, the `report` command shows what it delivered and what it cost, so you can check for yourself.
 
 ## What it does
-- `has-new`: a free check before any model call. Exit 0 = something new, 1 = nothing new, so stop.
-- `context --only-new`: the summary plus only the messages after this agent's cursor, not the whole thread.
+- `has-new`: a free check before any model call. Exit 0 = something new, 1 = nothing new, so stop. Anything other than 0 or 1 means wake and alert; do not stop silently. Exit 3 is a SQLite store error (missing path, corrupt file, lock or I/O failure, or schema not installed). Stderr is one `store error:` line and does not include the database path.
+- `context --only-new`: the summary plus every message after this agent's cursor, together in one slice, not the whole thread. Reading context does not advance the cursor. Only `commit` does.
 - `commit`: moves the cursor (and optionally saves a summary, guarded against two agents overwriting each other).
 - `search` / `expand`: pull exact detail from the raw messages when a summary dropped it.
 - `report`: per-agent tokens delivered vs what a full replay would have cost, including this tool's own overhead.
@@ -46,7 +46,7 @@ A path ending in `.db` selects SQLite. A `postgresql://` DSN selects Postgres (n
 `python3 usage_baseline.py your-export.csv --since 2026-11-01` turns a Grok Bot usage export into per-run numbers (runs per day, steps per run, cached share, share in the largest runs). Aggregates only.
 
 ## Tests
-`pip install pytest`, then `python3 -m pytest test_sqlite.py` (no server). Postgres tests need `CTX_DSN` and psycopg. The SQLite file of record for this package is 19 passed.
+`pip install pytest`, then `python3 -m pytest test_sqlite.py` (no server). Postgres tests need `CTX_DSN` and psycopg. The SQLite file of record for this package is 27 passed.
 
 ## Try it (reviewer)
 The local SQLite smoke test requires no ctxlayer account or API key. Downloading dependencies may use the network. Optional Anthropic summarization and transcript extraction send selected content to Anthropic when enabled; they are not used in this test. From the directory that contains `cli.py`:
@@ -62,7 +62,7 @@ python3 cli.py --dsn /tmp/ctx-review.db commit --agent agent2 --thread myproject
 python3 cli.py --dsn /tmp/ctx-review.db has-new --agent agent2 --thread myproject
 ```
 
-Pass looks like this: pytest prints `19 passed`; install prints `installed`; ingest prints `1`; the first `has-new` exits 0; context prints `hello`; commit exits 0; the second `has-new` exits 1.
+Pass looks like this: pytest prints `27 passed`; install prints `installed`; ingest prints `1`; the first `has-new` exits 0; context prints `hello`; commit exits 0; the second `has-new` exits 1. If `has-new` exits with anything other than 0 or 1, including exit 3, alert. That is not a quiet thread.
 
 In the app, after the plugin is installed from this repo, ask the agent to run `has-new` on a thread with nothing new. It should stop and not answer. Do not paste the database file, logs, or account details into a review or an issue.
 
@@ -71,6 +71,7 @@ The free plugin is the local file and the wake gate. A paid service is not part 
 
 ## Limits
 - SQLite: one writer at a time (waits up to 10 seconds); not tested with many writers, on Windows, or on Python versions we did not run. Facts/pgvector and LISTEN/NOTIFY are Postgres-only.
+- A retried ingest with the same external id prints `duplicate` and does not write a second row. A different body for that id is ignored; the first body stays. Recording edits is a known gap.
 - Token counts are estimates (characters / 4).
 - Summaries cost model tokens. They are opt-in and only worth it on long threads.
 - Search is unindexed; fine for threads of a few hundred messages.
