@@ -10,7 +10,7 @@ One local `.db` file. No Postgres, no MCP server, no UI. Python standard library
 
 This package is an early beta. It makes no savings claim. `report` prints delivered tokens against a full-replay estimate, including this tool's own overhead, so you can check a run yourself.
 
-Run every command from the package directory (the directory that contains `cli.py`). Pass `--dsn` on every call. The CLI reads `CTX_DSN` when `--dsn` is omitted. `has-new`, `context`, and `commit` also require `--agent` and `--thread`. `commit` also requires `--upto`. A command missing those flags exits with an argparse error. Stop when that happens.
+Run every command from the package directory (the directory that contains `cli.py`). Pass `--dsn` on every call. The CLI reads `CTX_DSN` when `--dsn` is omitted. `has-new`, `context`, and `commit` also require `--agent` and `--thread`. `commit` also requires `--upto`. A command missing those flags exits with an argparse error. Do not guess the flags. For `has-new`, that exit is anything other than 0 or 1: wake and alert, and do not stop silently.
 
 ## 0. Preconditions
 
@@ -25,6 +25,7 @@ python3 cli.py --dsn "$CTX_DSN" has-new --agent <own id> --thread <thread>
 
 - Exit 0: stdout is the count of new messages. Continue.
 - Exit 1: nothing new. Stop. No acknowledgement and no "nothing new" message.
+- Anything other than 0 or 1: wake and alert. Do not stop silently, and do not treat the thread as quiet. Exit 3 is a store error: the SQLite file is missing, unreadable, corrupt, locked, or has no schema. Stderr is one `store error:` line and does not include the database path.
 - `--ignore` is optional. The default ignores this agent.
 
 ## 2. Read the slice
@@ -33,7 +34,7 @@ python3 cli.py --dsn "$CTX_DSN" has-new --agent <own id> --thread <thread>
 python3 cli.py --dsn "$CTX_DSN" context --agent <own id> --thread <thread> --only-new
 ```
 
-Keep `last_id`, `version`, and `needs_summary` from the footer JSON on stderr.
+Keep `last_id`, `version`, and `needs_summary` from the footer JSON on stderr. Every message past the cursor comes back in this one slice. Reading context does not advance the cursor. Only commit does.
 
 Optional flags: `--json`, `--max-tail-tokens N`.
 
@@ -74,10 +75,11 @@ The body may come from stdin when `--body` is omitted.
 
 - For a Slack message, the external id is the message ts.
 - Name the thread with a project slug, or `slack:<channel_id>:<thread_ts>`.
-- A repeat of the same `--external-id` prints `duplicate` and exits 0. It does not write a second row.
+- A repeat of the same `--external-id` prints `duplicate` and exits 0. It does not write a second row. A different body for that same id is ignored too. The first body stays. Recording edits is a known gap.
 
 ## Run rules
 
+- `has-new`: stop only on exit 1. Anything other than 0 or 1 means wake and alert, including exit 3.
 - Stop after about 40 tool calls, or after 2 failed attempts on the same step, and hand back.
 - One writer at a time. The SQLite lock waits up to 10 seconds.
 - Not on SQLite: facts, pgvector, LISTEN/NOTIFY, and `install --extras`.

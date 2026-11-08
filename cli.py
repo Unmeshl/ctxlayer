@@ -5,7 +5,7 @@ DSN comes from --dsn or the CTX_DSN environment variable.
 
   python3 cli.py install
   python3 cli.py ingest   --thread myproject --author agent2 --external-id 1730000000.123 --body "text"   (or body on stdin)
-  python3 cli.py has-new  --agent agent1 --thread myproject        # exit 0 if new messages for her, 1 if none (gate)
+  python3 cli.py has-new  --agent agent1 --thread myproject        # exit 0 new, 1 quiet, 3 SQLite store error (gate)
   python3 cli.py context  --agent agent1 --thread myproject        # prompt-ready slice on stdout, token stats on stderr
   python3 cli.py commit   --agent agent1 --thread myproject --upto 123 [--summary-file s.txt --expected-version 4]
   python3 cli.py maintain --thread myproject [--force] [--summarizer extractive|anthropic]
@@ -29,10 +29,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 
 from ctxlayer import ContextStore, StaleSummary  # noqa: F401
 from sqlite_store import open_brief_store, open_store
+
+
+def _safe_store_message(exc: BaseException, dsn: str) -> str:
+    """SQLite failure text for stderr. Never echo a path or a DSN."""
+    msg = " ".join(str(exc).split()) or "database unavailable"
+    if dsn and dsn in msg:
+        msg = msg.replace(dsn, "database")
+    if "://" in msg or "/" in msg or "\\" in msg:
+        return "database unavailable"
+    return msg
 
 
 def _brief(a) -> int:
@@ -171,7 +182,14 @@ def main(argv=None) -> int:
         mid = store.append_message(a.thread, a.author, body, external_id=a.external_id)
         print(mid if mid is not None else "duplicate")
     elif a.cmd == "has-new":
-        n = store.has_new(a.agent, a.thread, ignore_authors=a.ignore)
+        try:
+            n = store.has_new(a.agent, a.thread, ignore_authors=a.ignore)
+        except (sqlite3.ProgrammingError, sqlite3.NotSupportedError):
+            raise  # bad SQL is a bug; do not report it as a quiet thread or a store outage
+        except sqlite3.DatabaseError as e:
+            # Missing parent, corrupt file, lock, I/O, or schema not installed. Not exit 1.
+            print(f"store error: {_safe_store_message(e, a.dsn)}", file=sys.stderr)
+            return 3
         print(n)
         return 0 if n else 1
     elif a.cmd == "context":
